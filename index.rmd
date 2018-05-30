@@ -1,0 +1,109 @@
+---
+title: "Prediction assignment"
+author: "Pierre Beukes"
+date: "30 May 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Introduction
+
+This assigment uses accelerometer data from 6 participants who performed barbell lifts in 5 different ways - a correct way (A) and then some less-correct ways (B-E). The goal of the project is to use this data and predict the manner in which they did the exercise. This report will explain how the data was cleaned, explored, how a model was fit to a part of the data, how the model was validated against an independent part of the data, and then how the model was used to predict the manner of the exercise in a third (test) data set where the outcome variable (correctness of the exercise) was unknown.
+
+### Loading and reshaping the data
+
+The work was done in R and required the loading of libraries for some of the functions. Training and testing data sets were provided separately. Only the training set was used for build and evaluating the accuracy of the model.
+
+```{r Load, results='hide'}
+suppressMessages({
+  library(caret)
+  library(tidyverse)
+  library(dplyr)
+})
+training<-read.csv('pml-training.csv')
+testing<-read.csv('pml-testing.csv')
+training<-tbl_df(training)
+testing<-tbl_df(testing)
+```
+### Inspect and "clean" the data
+
+Both training and testing data sets contained variables with NA values. These variables were removed from both. I did an exploratory plot to get a feel for the distribution of the numbers of the class (outcome) of the exercises for the 6 participants. The first 7 variables of each set was deemed unnecessary for model building because they gave the names of the participants and time stamps of the accelerometers, amongst others. These variables were also removed. Both training and testing data sets were treated exactly the same.
+
+```{r Clean, results='hide'}
+dim(training)
+head(training)
+str(training)
+summary(training)
+colSums(is.na(training))
+colSums(is.na(testing))
+new_training<-training[,colSums(is.na(testing))==0]
+new_testing<-testing[,colSums(is.na(testing))==0]
+qplot(classe,fill=user_name,data=new_training)
+new_training<-subset(new_training,select=-c(X:num_window))
+new_testing<-subset(new_testing,select=-c(X:num_window))
+```
+### Correlation matrix and removing some highly correlated variables
+
+I constructed a correlation matrix between all 52 remaining variables. The results were used to plot highly correlated variables against each other and to decide which ones can be eliminated. Removing correlated variables from the data set is important for reducing the prediction variance of the model
+
+```{r Correlate, results='hide'}
+m<-abs(cor(new_training[,-53]))
+diag(m)<-0
+which(m>0.95,arr.ind=T)
+qplot(accel_belt_z,roll_belt,data=new_training,colour=classe)
+qplot(accel_belt_x,pitch_belt,data=new_training,colour=classe)
+qplot(gyros_dumbbell_z,gyros_dumbbell_x,data=new_training,colour=classe)
+```
+
+### Remove some of the correlated variables
+
+Here I tested for near zero variance in all the variables with the intention to remove those with low variance that would not contribute to the model's ability to distinguish between the classes of the outcome. The test showed that none of the variables were elligible for removal, but I removed some of those (4 variables) shown to have hight correlation with some other variables.The final number of variables used in the model was 48.
+
+```{r Remove, results='hide'}
+nsv<-nearZeroVar(new_training,saveMetrics=TRUE)
+nsv
+new_training2<-subset(new_training,select=-c(accel_belt_z,accel_belt_x,gyros_dumbbell_z,gyros_dumbbell_x))
+new_testing2<-subset(new_testing,select=-c(accel_belt_z,accel_belt_x,gyros_dumbbell_z,gyros_dumbbell_x))
+```
+# Model building
+
+Here I show how I split the training data set into a model building portion of the data (90%) and a validation portion of the data (10%). The building portion is used to build the model and the validation portion is used to estimate the out of sample error of the model. With a non-linear setting, 5 categories or classes to predict and because I was looking for high accuracy, I decided to use a random forest model, with a 3-fold cross validation built into the procedure.
+
+### Building and Validation data sets
+
+```{r Partitioning, results='hide'}
+set.seed(32323)
+inBuild<-createDataPartition(y=new_training2$classe,p=0.9,list=FALSE)
+buildData<-new_training2[inBuild,]
+validation<-new_training2[-inBuild,]
+```
+
+### Model fit
+
+The model shows over 99% accuracy on the Building data for all three cross-validation sub-sets (3 folds)
+
+```{r Model}
+modFit <- train(classe ~ .,data = buildData,method = "rf",
+                trControl = trainControl(method="cv",number=3,savePredictions = T)) 
+modFit
+```
+# Model validation
+
+The result of the model validation shows that the expected out of sample error of the model is 0.5% (99.5% accuracy), with a 95% confidence interval of 0.2 to 0.9% (99.8 to 99.1% accuracy).
+
+```{r Validation}
+predVal<-predict(modFit,newdata=validation)
+confusionMatrix(predVal,validation$classe)
+```
+# Model performance
+
+Here the model is used to predict the outcome (category of correctness of the exercise) for 20 different test cases.
+
+```{r Testing}
+testing_rf_pred<-predict(modFit,new_testing2)
+testing_rf_pred
+```
+
